@@ -5,65 +5,31 @@ using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.JSInterop;
+using Soenneker.Extensions.ValueTask;
 
 namespace Soenneker.Blazor.Extensions.IJSObjectReferences;
 
 /// <summary>
-/// Extension methods that add operation context to JavaScript invocation failures.
+/// Adds operation context to JavaScript invocation failures.
 /// </summary>
+/// <remarks>
+/// Script failures retain their original exception as the inner exception. Disconnect and cancellation
+/// exceptions propagate unchanged. Overloads without a token or timeout preserve the runtime's default timeout.
+/// Metadata overloads support ordinary JSON results, not JS object references or streams that require
+/// runtime converters. Their metadata controls result deserialization only; arguments still use runtime serialization.
+/// </remarks>
 public static class IJSObjectReferencesExtensions
 {
     /// <summary>
-    /// Invokes a JavaScript function and deserializes its result using the supplied JSON type metadata,
-    /// adding its identifier to script failures.
+    /// Invokes a JavaScript function without a result using the runtime's default timeout.
     /// </summary>
-    /// <remarks>
-    /// The result passes through a <see cref="JsonElement"/>. The metadata controls result deserialization only;
-    /// arguments still use the JS runtime's serialization. Disconnect, cancellation, and JSON deserialization
-    /// exceptions propagate unchanged.
-    /// </remarks>
-    /// <returns>The deserialized result, which may be null.</returns>
-    public static ValueTask<T?> InvokeWithContextAsync<T>(this IJSObjectReference module, string identifier, JsonTypeInfo<T> jsonTypeInfo,
-        params object?[]? args) =>
-        module.InvokeWithContextAsync(identifier, jsonTypeInfo, CancellationToken.None, args);
-
-    /// <summary>
-    /// Invokes a JavaScript function using the supplied cancellation token and deserializes its result using
-    /// the supplied JSON type metadata, adding its identifier to script failures and retaining the original inner exception.
-    /// </summary>
-    /// <remarks>
-    /// The result passes through a <see cref="JsonElement"/>. The metadata controls result deserialization only;
-    /// arguments still use the JS runtime's serialization. Disconnect, cancellation, and JSON deserialization
-    /// exceptions propagate unchanged.
-    /// </remarks>
-    /// <returns>The deserialized result, which may be null.</returns>
-    public static async ValueTask<T?> InvokeWithContextAsync<T>(this IJSObjectReference module, string identifier, JsonTypeInfo<T> jsonTypeInfo,
-        CancellationToken cancellationToken, params object?[]? args)
-    {
-        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
-
-        JsonElement result = await module.InvokeWithContextAsync<JsonElement>(identifier, cancellationToken, args);
-        return result.Deserialize(jsonTypeInfo);
-    }
-
-    /// <summary>
-    /// Invokes a JavaScript function without a return value, adding its identifier to script failures.
-    /// </summary>
-    /// <remarks>Disconnect and cancellation exceptions propagate unchanged.</remarks>
-    public static ValueTask InvokeVoidWithContextAsync(this IJSObjectReference module, string identifier, params object?[]? args) =>
-        module.InvokeVoidWithContextAsync(identifier, CancellationToken.None, args);
-
-    /// <summary>
-    /// Invokes a JavaScript function without a return value using the supplied cancellation token,
-    /// adding its identifier to script failures while preserving the original exception as the inner exception.
-    /// </summary>
-    /// <remarks>Disconnect and cancellation exceptions propagate unchanged.</remarks>
-    public static async ValueTask InvokeVoidWithContextAsync(this IJSObjectReference module, string identifier, CancellationToken cancellationToken,
+    public static async ValueTask InvokeVoidWithContextAsync(this IJSObjectReference module, string identifier,
         params object?[]? args)
     {
+        ArgumentNullException.ThrowIfNull(module);
         try
         {
-            await module.InvokeVoidAsync(identifier, cancellationToken, args);
+            await module.InvokeVoidAsync(identifier, args).NoSync();
         }
         catch (JSException exception)
         {
@@ -72,30 +38,128 @@ public static class IJSObjectReferencesExtensions
     }
 
     /// <summary>
-    /// Invokes a JavaScript function and returns its result, adding its identifier to script failures.
+    /// Invokes a JavaScript function and returns its result using the runtime's default timeout.
     /// </summary>
-    /// <remarks>Disconnect and cancellation exceptions propagate unchanged.</remarks>
-    public static ValueTask<T> InvokeWithContextAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors |
-        DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)] T>(
-        this IJSObjectReference module, string identifier, params object?[]? args) =>
-        module.InvokeWithContextAsync<T>(identifier, CancellationToken.None, args);
+    public static async ValueTask<T> InvokeWithContextAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        this IJSObjectReference module, string identifier, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        try
+        {
+            return await module.InvokeAsync<T>(identifier, args).NoSync();
+        }
+        catch (JSException exception)
+        {
+            throw new JSException($"JavaScript operation '{identifier}' failed: {exception.Message}", exception);
+        }
+    }
 
     /// <summary>
-    /// Invokes a JavaScript function and returns its result using the supplied cancellation token,
-    /// adding its identifier to script failures while preserving the original exception as the inner exception.
+    /// Invokes a JavaScript function using the runtime's default timeout and deserializes its JSON result
+    /// with the supplied metadata.
     /// </summary>
-    /// <remarks>Disconnect and cancellation exceptions propagate unchanged.</remarks>
-    public static async ValueTask<T> InvokeWithContextAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors |
-        DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+    /// <remarks>JSON deserialization exceptions propagate unchanged. Use the original overloads for JS references and streams.</remarks>
+    /// <returns>The deserialized result, which may be null.</returns>
+    public static async ValueTask<T?> InvokeWithContextAsync<T>(this IJSObjectReference module, string identifier,
+        JsonTypeInfo<T> jsonTypeInfo, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+        JsonElement result = await module.InvokeWithContextAsync<JsonElement>(identifier, args).NoSync();
+        return result.Deserialize(jsonTypeInfo);
+    }
+    /// <summary>
+    /// Invokes a JavaScript function without a result using the supplied cancellation token, overriding the default timeout.
+    /// </summary>
+    public static async ValueTask InvokeVoidWithContextAsync(this IJSObjectReference module, string identifier,
+        CancellationToken cancellationToken, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        try
+        {
+            await module.InvokeVoidAsync(identifier, cancellationToken, args).NoSync();
+        }
+        catch (JSException exception)
+        {
+            throw new JSException($"JavaScript operation '{identifier}' failed: {exception.Message}", exception);
+        }
+    }
+
+    /// <summary>
+    /// Invokes a JavaScript function and returns its result using the supplied cancellation token, overriding the default timeout.
+    /// </summary>
+    public static async ValueTask<T> InvokeWithContextAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         this IJSObjectReference module, string identifier, CancellationToken cancellationToken, params object?[]? args)
     {
+        ArgumentNullException.ThrowIfNull(module);
         try
         {
-            return await module.InvokeAsync<T>(identifier, cancellationToken, args);
+            return await module.InvokeAsync<T>(identifier, cancellationToken, args).NoSync();
         }
         catch (JSException exception)
         {
             throw new JSException($"JavaScript operation '{identifier}' failed: {exception.Message}", exception);
         }
     }
+
+    /// <summary>
+    /// Invokes a JavaScript function using the supplied cancellation token, overriding the default timeout and deserializes its JSON result
+    /// with the supplied metadata.
+    /// </summary>
+    /// <remarks>JSON deserialization exceptions propagate unchanged. Use the original overloads for JS references and streams.</remarks>
+    /// <returns>The deserialized result, which may be null.</returns>
+    public static async ValueTask<T?> InvokeWithContextAsync<T>(this IJSObjectReference module, string identifier,
+        JsonTypeInfo<T> jsonTypeInfo, CancellationToken cancellationToken, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+        JsonElement result = await module.InvokeWithContextAsync<JsonElement>(identifier, cancellationToken, args).NoSync();
+        return result.Deserialize(jsonTypeInfo);
+    }
+    /// <summary>
+    /// Invokes a JavaScript function without a result using the supplied timeout.
+    /// </summary>
+    public static async ValueTask InvokeVoidWithContextAsync(this IJSObjectReference module, string identifier,
+        TimeSpan timeout, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        try
+        {
+            await module.InvokeVoidAsync(identifier, timeout, args).NoSync();
+        }
+        catch (JSException exception)
+        {
+            throw new JSException($"JavaScript operation '{identifier}' failed: {exception.Message}", exception);
+        }
+    }
+
+    /// <summary>
+    /// Invokes a JavaScript function and returns its result using the supplied timeout.
+    /// </summary>
+    public static async ValueTask<T> InvokeWithContextAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        this IJSObjectReference module, string identifier, TimeSpan timeout, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        try
+        {
+            return await module.InvokeAsync<T>(identifier, timeout, args).NoSync();
+        }
+        catch (JSException exception)
+        {
+            throw new JSException($"JavaScript operation '{identifier}' failed: {exception.Message}", exception);
+        }
+    }
+
+    /// <summary>
+    /// Invokes a JavaScript function using the supplied timeout and deserializes its JSON result
+    /// with the supplied metadata.
+    /// </summary>
+    /// <remarks>JSON deserialization exceptions propagate unchanged. Use the original overloads for JS references and streams.</remarks>
+    /// <returns>The deserialized result, which may be null.</returns>
+    public static async ValueTask<T?> InvokeWithContextAsync<T>(this IJSObjectReference module, string identifier,
+        JsonTypeInfo<T> jsonTypeInfo, TimeSpan timeout, params object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+        JsonElement result = await module.InvokeWithContextAsync<JsonElement>(identifier, timeout, args).NoSync();
+        return result.Deserialize(jsonTypeInfo);
+    }
 }
+
